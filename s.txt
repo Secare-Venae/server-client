@@ -1,0 +1,79 @@
+package main
+
+import (
+	"bufio"
+	"fmt"
+	"log"
+	"net"
+	"strings"
+	"sync"
+)
+
+var (
+	messageLog = make(chan string, 10)
+
+	clients   = make(map[net.Conn]struct{})
+	clientsMu sync.Mutex
+)
+
+func logMessages() {
+	for msg := range messageLog {
+		fmt.Println(msg)
+	}
+}
+
+func handleClient(conn net.Conn) {
+	defer conn.Close()
+
+	clientsMu.Lock()
+	clients[conn] = struct{}{}
+	clientsMu.Unlock()
+
+	welcome := "[Сервер] Вы подключены к чату. Введите сообщение:"
+	messageLog <- welcome
+	fmt.Fprintln(conn, welcome)
+
+	scanner := bufio.NewScanner(conn)
+	for scanner.Scan() {
+		text := strings.TrimSpace(scanner.Text())
+		if text == "" {
+			continue
+		}
+
+		msg := fmt.Sprintf("[Клиент]", conn.RemoteAddr(), text)
+		messageLog <- msg
+
+		clientsMu.Lock()
+		for client := range clients {
+			fmt.Fprintln(client, msg)
+		}
+		clientsMu.Unlock()
+	}
+
+	// Удаляем
+	clientsMu.Lock()
+	delete(clients, conn)
+	clientsMu.Unlock()
+	messageLog <- fmt.Sprintf("[Сервер] Клиент %s отключился", conn.RemoteAddr())
+}
+
+func main() {
+	listener, err := net.Listen("tcp", ":8080")
+	if err != nil {
+		log.Fatal("Не удалось запустить сервер:", err)
+	}
+	defer listener.Close()
+
+	fmt.Println("Сервер чата запущен на :8080")
+
+	go logMessages()
+
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			log.Printf("Ошибка принятия соединения: %v", err)
+			continue
+		}
+		go handleClient(conn)
+	}
+}
